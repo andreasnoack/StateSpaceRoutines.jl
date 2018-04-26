@@ -29,10 +29,67 @@ all particles, calling this method on each.
 - `accept_rate`: acceptance rate across N_MH steps
 
 """
-function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::Matrix{Float64},
-                                    det_HH::Float64, inv_HH::Matrix{Float64}, φ_new::S, y_t::Vector{S},
-                                    s_non::Matrix{S}, s_init::Matrix{S}, ϵ_init::Matrix{S}, c::S, N_MH::Int;
-                                    ϵ_testing::Matrix{S} = zeros(0,0), parallel::Bool = false)
+# function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::Matrix{Float64},
+#                                     det_HH::Float64, inv_HH::Matrix{Float64}, φ_new::S, y_t::Vector{S},
+#                                     s_non::Matrix{S}, s_init::Matrix{S}, ϵ_init::Matrix{S}, c::S, N_MH::Int;
+#                                     ϵ_testing::Matrix{S} = zeros(0,0), parallel::Bool = false)
+#     #------------------------------------------------------------------------
+#     # Setup
+#     #------------------------------------------------------------------------
+
+#     # Check if testing
+#     testing = !isempty(ϵ_testing)
+
+#     # Initialize s_out and ε_out
+#     s_out = similar(s_init)
+#     ϵ_out = similar(ϵ_init)
+
+#     # Store length of y_t, ε
+#     n_obs    = size(y_t, 1)
+#     n_states = size(ϵ_init, 1)
+#     n_particles = size(ϵ_init, 2)
+
+#     # Initialize acceptance counter to zero
+#     accept_vec = zeros(n_particles)
+
+#     #------------------------------------------------------------------------
+#     # Metropolis-Hastings Steps
+#     #------------------------------------------------------------------------
+#     # Generate new draw of ε from a N(ε_init, c²I) distribution, c tuning parameter, I identity
+#     ϵ_new = similar(ϵ_init)
+#     for i in 1:n_particles
+#         ϵ_new[:,i] = rand(MvNormal(ϵ_init[:,i], c*QQ))
+#     end
+
+#     if parallel
+#         out = @sync @parallel (hcat) for i = 1:n_particles
+#             mh_step(Φ, Ψ, y_t, s_init[:,i], s_non[:,i], ϵ_init[:,i], ϵ_new[:,i], φ_new, det_HH, inv_HH,
+#                     n_obs, n_states, N_MH; testing = testing)
+#         end
+#         for i = 1:n_particles
+#             s_out[:,i]    = out[i][1]
+#             ϵ_out[:,i]    = out[i][2]
+#             accept_vec[i] = out[i][3]
+#         end
+#     else
+#         for i = 1:n_particles
+#             s_out[:,i], ϵ_out[:,i], accept_vec[i] = mh_step(Φ, Ψ, y_t, s_init[:,i], s_non[:,i], ϵ_init[:,i],
+#                                                             ϵ_new[:,i], φ_new, det_HH, inv_HH, n_obs, n_states,
+#                                                             N_MH; testing = testing)
+#         end
+#     end
+
+#     # Calculate acceptance rate
+#     accept_rate = sum(accept_vec)/(N_MH*n_particles)
+
+#     return s_out, ϵ_out, accept_rate
+# end
+function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::SMatrix{<:Any,<:Any,Float64},
+                                    det_HH::Float64, inv_HH::SMatrix{<:Any,<:Any,Float64}, φ_new::S,
+                                    y_t::SVector{<:Any,S},s_non::Vector{<:SVector}, s_init::Vector{<:SVector}, ϵ_init::Vector{<:SVector},
+                                    c::S, N_MH::Int;
+                                    ϵ_testing::Vector{<:SVector} = fill(zero(first(ϵ_init)), 0),
+                                    parallel::Bool = false)
     #------------------------------------------------------------------------
     # Setup
     #------------------------------------------------------------------------
@@ -44,10 +101,7 @@ function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::Matrix{Float
     s_out = similar(s_init)
     ϵ_out = similar(ϵ_init)
 
-    # Store length of y_t, ε
-    n_obs    = size(y_t, 1)
-    n_states = size(ϵ_init, 1)
-    n_particles = size(ϵ_init, 2)
+    n_particles = length(ϵ_init)
 
     # Initialize acceptance counter to zero
     accept_vec = zeros(n_particles)
@@ -58,24 +112,24 @@ function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::Matrix{Float
     # Generate new draw of ε from a N(ε_init, c²I) distribution, c tuning parameter, I identity
     ϵ_new = similar(ϵ_init)
     for i in 1:n_particles
-        ϵ_new[:,i] = rand(MvNormal(ϵ_init[:,i], c*QQ))
+        ϵ_new[i] = rand(Gauss.Gaussian(ϵ_init[i], c*QQ))
     end
 
     if parallel
         out = @sync @parallel (hcat) for i = 1:n_particles
-            mh_step(Φ, Ψ, y_t, s_init[:,i], s_non[:,i], ϵ_init[:,i], ϵ_new[:,i], φ_new, det_HH, inv_HH,
-                    n_obs, n_states, N_MH; testing = testing)
+            mh_step(Φ, Ψ, y_t, s_init[:,i], s_non[i], ϵ_init[i], ϵ_new[i], φ_new, det_HH, inv_HH,
+                    N_MH, testing)
         end
         for i = 1:n_particles
-            s_out[:,i]    = out[i][1]
-            ϵ_out[:,i]    = out[i][2]
+            s_out[i]    = out[i][1]
+            ϵ_out[i]    = out[i][2]
             accept_vec[i] = out[i][3]
         end
     else
         for i = 1:n_particles
-            s_out[:,i], ϵ_out[:,i], accept_vec[i] = mh_step(Φ, Ψ, y_t, s_init[:,i], s_non[:,i], ϵ_init[:,i],
-                                                            ϵ_new[:,i], φ_new, det_HH, inv_HH, n_obs, n_states,
-                                                            N_MH; testing = testing)
+            s_out[i], ϵ_out[i], accept_vec[i] = mh_step(Φ, Ψ, y_t, s_init[i], s_non[i], ϵ_init[i],
+                                                        ϵ_new[i], φ_new, det_HH, inv_HH,
+                                                        N_MH, testing)
         end
     end
 
@@ -85,31 +139,87 @@ function mutation{S<:AbstractFloat}(Φ::Function, Ψ::Function, QQ::Matrix{Float
     return s_out, ϵ_out, accept_rate
 end
 
-function mh_step(Φ::Function, Ψ::Function, y_t::Vector{Float64}, s_init::Vector{Float64},
-                 s_non::Vector{Float64}, ϵ_init::Vector{Float64}, ϵ_new::Vector{Float64},
-                 φ_new::Float64, det_HH::Float64, inv_HH::Matrix{Float64},
-                 n_obs::Int, n_states::Int, N_MH::Int; testing::Bool = false)
-    s_out = similar(s_init)
-    ϵ_out = similar(ϵ_init)
+
+# function mh_step(Φ::Function, Ψ::Function, y_t::Vector{Float64}, s_init::Vector{Float64},
+#                  s_non::Vector{Float64}, ϵ_init::Vector{Float64}, ϵ_new::Vector{Float64},
+#                  φ_new::Float64, det_HH::Float64, inv_HH::Matrix{Float64},
+#                  n_obs::Int, n_states::Int, N_MH::Int; testing::Bool = false)
+#     s_out = similar(s_init)
+#     ϵ_out = similar(ϵ_init)
+#     accept = 0.
+
+#     for j = 1:N_MH
+
+#         # Use the state equation to calculate the corresponding state from that ε
+#         s_new = Φ(s_init, ϵ_new)
+
+#         # Calculate difference between data and expected y from measurement equation
+#         u_t = zeros(n_obs)
+#         error_new  = y_t - Ψ(s_new, u_t)
+#         error_init = y_t - Ψ(s_non, u_t)
+
+#         # Calculate posteriors
+#         μ_1 = u_t
+#         scaled_det_HH = det_HH/(φ_new)^n_obs
+#         scaled_inv_HH = inv_HH*φ_new
+
+#         μ_2 = zeros(n_states)
+#         inv_ϵ_cov  = eye(n_states)
+
+#         post_new_1  = fast_mvnormal_pdf(error_new, μ_1, scaled_det_HH, scaled_inv_HH)
+#         post_new_2  = fast_mvnormal_pdf(ϵ_new, μ_2, 1., inv_ϵ_cov)
+#         post_init_1 = fast_mvnormal_pdf(error_init, μ_1, scaled_det_HH, scaled_inv_HH)
+#         post_init_2 = fast_mvnormal_pdf(ϵ_init, μ_2, 1., inv_ϵ_cov)
+
+#         post_new = post_new_1 * post_new_2
+#         post_init = post_init_1 * post_init_2
+
+#         # Calculate α, probability of accepting the new particle
+#         α = post_new/post_init
+#         rval = testing ? 0.5 : rand()
+
+#         # Accept the particle with probability α
+#         if rval < α
+#             # Accept and update particle
+#             s_out = s_new
+#             ϵ_out = ϵ_new
+#             accept += 1.
+#         else
+#             # Reject and keep particle unchanged
+#             s_out = s_non
+#             ϵ_out = ϵ_init
+#         end
+#         ϵ_init = ϵ_out
+#         s_non  = s_out
+#     end
+#     return s_out, ϵ_out, accept
+# end
+function mh_step(Φ::Function, Ψ::Function, y_t::SVector{Nobs,Float64}, s_init::SVector{<:Any,Float64},
+                 s_non::SVector{<:Any,Float64}, ϵ_init::SVector{Nstates,Float64}, ϵ_new::SVector{Nstates,Float64},
+                 φ_new::Float64, det_HH::Float64, inv_HH::SMatrix{<:Any,<:Any,Float64},
+                 N_MH::Int, testing::Bool) where {Nobs,Nstates}
+ # = false
+    s_out = s_init
+    ϵ_out = ϵ_init
     accept = 0.
 
     for j = 1:N_MH
 
         # Use the state equation to calculate the corresponding state from that ε
-        s_new = Φ(s_init, ϵ_new)
+        s_new::typeof(s_init) = Φ(s_init, ϵ_new)
 
         # Calculate difference between data and expected y from measurement equation
-        u_t = zeros(n_obs)
-        error_new  = y_t - Ψ(s_new, u_t)
-        error_init = y_t - Ψ(s_non, u_t)
+        u_t = @SVector zeros(Nobs)
+        error_new::typeof(y_t)  = y_t - Ψ(s_new, u_t)
+        error_init::typeof(y_t) = y_t - Ψ(s_non, u_t)
 
         # Calculate posteriors
         μ_1 = u_t
-        scaled_det_HH = det_HH/(φ_new)^n_obs
+        scaled_det_HH = det_HH/(φ_new)^Nobs
         scaled_inv_HH = inv_HH*φ_new
 
-        μ_2 = zeros(n_states)
-        inv_ϵ_cov  = eye(n_states)
+        μ_2         = @SVector zeros(Nstates)
+        inv_ϵ_cov   = @SMatrix eye(Nstates)
 
         post_new_1  = fast_mvnormal_pdf(error_new, μ_1, scaled_det_HH, scaled_inv_HH)
         post_new_2  = fast_mvnormal_pdf(ϵ_new, μ_2, 1., inv_ϵ_cov)
@@ -137,5 +247,6 @@ function mh_step(Φ::Function, Ψ::Function, y_t::Vector{Float64}, s_init::Vecto
         ϵ_init = ϵ_out
         s_non  = s_out
     end
+
     return s_out, ϵ_out, accept
 end

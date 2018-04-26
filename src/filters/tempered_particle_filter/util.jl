@@ -24,17 +24,34 @@ This is under the assumption that the s_t reaches its stationary distribution po
 - `s_init`: A matrix (# of states x # of particles) containing the initial draws of states to start
 the tpf algorithm from.
 """
-function initialize_state_draws(s0::Vector{Float64}, F_ϵ::Distribution, Φ::Function,
-                                n_parts::Int; burn::Int = 10000, thin::Int = 5)
-    s_init = zeros(length(s0), n_parts)
+# function initialize_state_draws(s0::Vector{Float64}, F_ϵ::Distribution, Φ::Function,
+#                                 n_parts::Int; burn::Int = 10000, thin::Int = 5)
+#     s_init = zeros(length(s0), n_parts)
+#     s_old = s0
+#     for i in 1:(burn + thin*n_parts)
+#         ϵ = rand(F_ϵ)
+#         s_new = Φ(s_old, ϵ)
+
+#         if i > burn && i % thin == 0
+#             draw_index = convert(Int, (i - burn)/thin)
+#             s_init[:, draw_index] = s_new
+#         end
+
+#         s_old = s_new
+#     end
+#     return s_init
+# end
+function initialize_state_draws(s0::SVector{N,Float64}, F_ϵ, Φ::Function,
+                                n_parts::Int; burn::Int = 10000, thin::Int = 5) where N
+    s_init = [@SVector(zeros(N)) for i in 1:n_parts]
     s_old = s0
     for i in 1:(burn + thin*n_parts)
-        ϵ = rand(F_ϵ)
+        ϵ     = rand(F_ϵ)
         s_new = Φ(s_old, ϵ)
 
         if i > burn && i % thin == 0
-            draw_index = convert(Int, (i - burn)/thin)
-            s_init[:, draw_index] = s_new
+            draw_index = div(i - burn, thin)
+            s_init[draw_index] = s_new
         end
 
         s_old = s_new
@@ -58,7 +75,7 @@ end
 """
 ```
 solve_inefficiency{S<:AbstractFloat}(φ_new::S, φ_old::S, y_t::Vector{S}, p_error::Matrix{S},
-inv_HH::Matrix{S}, det_HH::S; initialize::Bool=false)
+inv_HH::Matrix{S}, det_HH::S, initialize::Bool=false)
 ```
 Returns the value of the ineffeciency function InEff(φₙ), where:
 
@@ -91,7 +108,7 @@ Where ∑ is over j=1...M particles, and incremental weight is:
 
 """
 function solve_inefficiency{S<:AbstractFloat}(φ_new::S, coeff_terms::Vector{Float64}, exp_1_terms::Vector{Float64},
-                                              exp_2_terms::Vector{Float64}, n_obs::Int64; parallel::Bool = false)
+                                              exp_2_terms::Vector{Float64}, n_obs::Int64, parallel::Bool = false)
 
     n_particles = length(coeff_terms)
 
@@ -106,13 +123,15 @@ function solve_inefficiency{S<:AbstractFloat}(φ_new::S, coeff_terms::Vector{Flo
         end
     end
 
-    W = w/mean(w)
-    return sum(W.^2)/n_particles
+    # W = w/mean(w)
+    # return sum(abs2, W)/n_particles
+    mw = mean(w)
+    return sum(abs2, w)/(mw*mw*n_particles)
 end
 
 function incremental_weight(φ_new::Float64, coeff_term::Float64, log_e_term_1::Float64,
                             log_e_term_2::Float64, n_obs::Int64)
-    return φ_new^(n_obs/2)*coeff_term * exp(log_e_term_1) * exp(φ_new*log_e_term_2)
+    return φ_new^(n_obs/2)*coeff_term * exp(log_e_term_1 + φ_new*log_e_term_2)
 end
 
 # The outputs of the weight_kernel function are meant to make calculating
@@ -122,9 +141,27 @@ end
 # Also, the exponential terms are logged first and then exponentiated in the
 # incremental_weight calculation so the problem is well-conditioned (i.e. not exponentiating
 # very large negative numbers)
-function weight_kernel(φ_old::Float64, y_t::Vector{Float64},
-                       p_error::Vector{Float64}, det_HH::Float64, inv_HH::Matrix{Float64};
-                       initialize::Bool = false)
+# function weight_kernel(φ_old::Float64, y_t::Vector{Float64},
+#                        p_error::Vector{Float64}, det_HH::Float64, inv_HH::Matrix{Float64};
+#                        initialize::Bool = false)
+
+#     # Initialization step (using 2π instead of φ_old)
+#     if initialize
+#         coeff_term = (2*pi)^(-length(y_t)/2) * det_HH^(-1/2)
+#         log_e_term_1   = 0.
+#         log_e_term_2   = -1/2 * dot(p_error, inv_HH * p_error)
+#         return coeff_term, log_e_term_1, log_e_term_2
+#     # Non-initialization step (tempering and final iteration)
+#     else
+#         coeff_term = (φ_old)^(-length(y_t)/2)
+#         log_e_term_1   = -1/2 * (-φ_old) * dot(p_error, inv_HH * p_error)
+#         log_e_term_2   = -1/2 * dot(p_error, inv_HH * p_error)
+#         return coeff_term, log_e_term_1, log_e_term_2
+#     end
+# end
+function weight_kernel(φ_old::Float64, y_t::SVector{N,Float64},
+                       p_error::SVector{N,Float64}, det_HH::Float64, inv_HH::SMatrix{N,N,Float64},
+                       initialize::Bool = false) where N
 
     # Initialization step (using 2π instead of φ_old)
     if initialize
@@ -227,8 +264,52 @@ function bisection(f::Function, a::Number, b::Number; tol::AbstractFloat=1e-1, m
     return c
 end
 
-function fast_mvnormal_pdf(x::Vector{Float64}, μ::Vector{Float64}, detΣ::Float64, invΣ::Matrix{Float64})
+function xyAxy(A::StridedMatrix{T}, x::StridedVector{T}, y::StridedVector{T}) where {T<:Real}
+    n   = length(x)
+    @inbounds begin
+        xy1 = (x[1] - y[1])
+        out = A[1,1]*xy1
+        for i in 2:n
+            out += 2*(x[i] - y[i])*A[i,1]
+        end
+    end
+    out *= xy1
+    if n > 1
+        return out + xyAxy(view(A, 2:n, 2:n), view(x, 2:n), view(y, 2:n))
+    else
+        return out
+    end
+end
+
+function xyAxy2(A::AbstractMatrix{T}, x::AbstractVector{T}, y::AbstractVector{T}, offset = 0) where {T<:Real}
+    n   = length(x)
+    @inbounds begin
+        xy1 = (x[1 + offset] - y[1 + offset])
+        out = A[1 + offset, 1 + offset]*xy1
+        offset1 = 1 + offset
+        for i in (2 + offset):n
+            out += 2*(x[i] - y[i])*A[i, offset1]
+        end
+    end
+    out *= xy1
+    if n > offset1
+        return out + xyAxy2(A, x, y, offset + 1)
+    else
+        return out
+    end
+end
+
+# function fast_mvnormal_pdf(x::AbstractVector{Float64}, μ::AbstractVector{Float64}, detΣ::Float64, invΣ::AbstractMatrix{Float64})
+#     coeff_term = (2*pi)^(-length(x)/2) * detΣ^(-1/2)
+#     # exp_term   = exp(-(1/2) * dot((x - μ), invΣ*(x - μ)))
+#     # exp_term   = exp(-(1/2) * xyAxy2(invΣ, x, μ))
+#     exp_term   = exp(-(1/2) * dot((x - μ), invΣ*(x - μ)))
+#     return coeff_term*exp_term
+# end
+function fast_mvnormal_pdf(x::SVector{<:Any,Float64}, μ::SVector{<:Any,Float64}, detΣ::Float64, invΣ::SMatrix{<:Any,<:Any,Float64})
     coeff_term = (2*pi)^(-length(x)/2) * detΣ^(-1/2)
     exp_term   = exp(-(1/2) * dot((x - μ), invΣ*(x - μ)))
+    # exp_term   = exp(-(1/2) * xyAxy2(invΣ, x, μ))
     return coeff_term*exp_term
 end
+
