@@ -206,12 +206,12 @@ function mh_step(Φ::Function, Ψ::Function, y_t::SVector{Nobs,Float64}, s_init:
     for j = 1:N_MH
 
         # Use the state equation to calculate the corresponding state from that ε
-        s_new::typeof(s_init) = Φ(s_init, ϵ_new)
+        s_new = Φ(s_init, ϵ_new)
 
         # Calculate difference between data and expected y from measurement equation
         u_t = @SVector zeros(Nobs)
-        error_new::typeof(y_t)  = y_t - Ψ(s_new, u_t)
-        error_init::typeof(y_t) = y_t - Ψ(s_non, u_t)
+        error_new  = y_t - Ψ(s_new, u_t)
+        error_init = y_t - Ψ(s_non, u_t)
 
         # Calculate posteriors
         μ_1 = u_t
